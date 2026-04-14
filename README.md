@@ -82,4 +82,3 @@ go build -o stripe-seeder .
 - [Lip Gloss](https://github.com/charmbracelet/lipgloss) — Estilos
 - [Bubbles](https://github.com/charmbracelet/bubbles) — Componentes (input, spinner)
 - [stripe-go](https://github.com/stripe/stripe-go) — SDK oficial do Stripe
-# stripe-seeder
