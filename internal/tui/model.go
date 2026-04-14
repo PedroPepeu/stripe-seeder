@@ -13,9 +13,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"stripe-seeder/internal/config"
-	"stripe-seeder/internal/logger"
-	stripeClient "stripe-seeder/internal/stripe"
+	"github.com/PedroPepeu/stripe-seeder/internal/config"
+	"github.com/PedroPepeu/stripe-seeder/internal/logger"
+	stripeClient "github.com/PedroPepeu/stripe-seeder/internal/stripe"
 )
 
 // --- Screen states -----------------------------------------------------------

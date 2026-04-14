@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"stripe-seeder/internal/logger"
+	"github.com/PedroPepeu/stripe-seeder/internal/logger"
 )
 
 var rng *rand.Rand

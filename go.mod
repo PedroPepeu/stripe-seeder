@@ -1,4 +1,4 @@
-module stripe-seeder
+module github.com/PedroPepeu/stripe-seeder
 
 go 1.21
 

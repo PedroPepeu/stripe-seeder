@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"stripe-seeder/internal/config"
-	"stripe-seeder/internal/logger"
-	"stripe-seeder/internal/tui"
+	"github.com/PedroPepeu/stripe-seeder/internal/config"
+	"github.com/PedroPepeu/stripe-seeder/internal/logger"
+	"github.com/PedroPepeu/stripe-seeder/internal/tui"
 )
 
 func main() {
