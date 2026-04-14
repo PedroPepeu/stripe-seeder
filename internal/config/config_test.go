@@ -24,7 +24,7 @@ func TestLoad_MissingFile(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("expected non-nil config")
 	}
-	if cfg.APIKey != "" || cfg.ProjectName != "" {
+	if cfg.ProjectName != "" {
 		t.Errorf("expected empty config, got %+v", cfg)
 	}
 }
@@ -42,7 +42,7 @@ func TestLoad_InvalidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.APIKey != "" || cfg.ProjectName != "" {
+	if cfg.ProjectName != "" {
 		t.Errorf("expected empty config on bad JSON, got %+v", cfg)
 	}
 }
@@ -50,7 +50,7 @@ func TestLoad_InvalidJSON(t *testing.T) {
 func TestSaveLoad_RoundTrip(t *testing.T) {
 	defer withTempHome(t)()
 
-	want := &Config{APIKey: "sk_test_abc123", ProjectName: "my-project"}
+	want := &Config{ProjectName: "my-project"}
 	if err := Save(want); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -58,9 +58,6 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	got, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if got.APIKey != want.APIKey {
-		t.Errorf("APIKey: got %q, want %q", got.APIKey, want.APIKey)
 	}
 	if got.ProjectName != want.ProjectName {
 		t.Errorf("ProjectName: got %q, want %q", got.ProjectName, want.ProjectName)
@@ -70,7 +67,7 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 func TestSave_FilePermissions(t *testing.T) {
 	defer withTempHome(t)()
 
-	cfg := &Config{APIKey: "sk_test_xyz"}
+	cfg := &Config{ProjectName: "test"}
 	if err := Save(cfg); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

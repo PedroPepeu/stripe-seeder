@@ -2,14 +2,19 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"stripe-seeder/internal/config"
+	"stripe-seeder/internal/logger"
 	stripeClient "stripe-seeder/internal/stripe"
 )
 
@@ -19,12 +24,13 @@ type screen int
 
 const (
 	screenMain screen = iota
-	screenSetKey
 	screenSeedProducts
 	screenSeedProductsPrices
 	screenSeedCustomers
+	screenSeedPaymentIntents
 	screenResults
 	screenLoading
+	screenDebugLog
 )
 
 // --- Menu items --------------------------------------------------------------
@@ -34,15 +40,6 @@ type menuItem struct {
 	desc  string
 }
 
-var mainMenuItems = []menuItem{
-	{title: "🔗  Ver Projeto Conectado", desc: "Mostra a chave API e ambiente atual"},
-	{title: "🔑  Alterar Chave API", desc: "Configurar ou trocar a Stripe API Key"},
-	{title: "📦  Seed: Produtos", desc: "Criar produtos com nomes aleatórios"},
-	{title: "💰  Seed: Produtos + Preços", desc: "Criar produtos com preços aleatórios"},
-	{title: "👤  Seed: Clientes", desc: "Criar clientes com dados aleatórios"},
-	{title: "🚪  Sair", desc: "Encerrar o programa"},
-}
-
 // --- Messages ----------------------------------------------------------------
 
 type seedDoneMsg struct {
@@ -50,18 +47,24 @@ type seedDoneMsg struct {
 	label  string
 }
 
-type validateKeyMsg struct {
-	env string
-	err error
+type checkLoginMsg struct {
+	info string
+	err  error
 }
+
+type loginDoneMsg struct{ err error }
+
+type loadLogMsg struct{ content string }
 
 // --- Model -------------------------------------------------------------------
 
 type Model struct {
-	cfg     *config.Config
-	screen  screen
-	cursor  int
-	env     string // "TEST 🟡" or "LIVE 🔴"
+	cfg         *config.Config
+	screen      screen
+	cursor      int
+	accountInfo string
+	debugMode   bool
+	menuItems   []menuItem
 
 	// text inputs for forms
 	inputs     []textinput.Model
@@ -75,6 +78,11 @@ type Model struct {
 	resultTitle string
 	resultLines []string
 
+	// debug log viewer
+	logViewport viewport.Model
+	logContent  string
+	copyStatus  string
+
 	// status message
 	statusMsg string
 
@@ -82,31 +90,41 @@ type Model struct {
 	height int
 }
 
-func NewModel(cfg *config.Config) Model {
+func NewModel(cfg *config.Config, debugMode bool) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = spinnerStyle
 
-	m := Model{
-		cfg:     cfg,
-		screen:  screenMain,
-		spinner: s,
+	items := []menuItem{
+		{title: "🔗  Ver Conta Conectada", desc: "Mostra informações da conta Stripe autenticada"},
+		{title: "🔑  Login com Stripe", desc: "Autenticar via stripe login (abre o navegador)"},
+		{title: "📦  Seed: Produtos", desc: "Criar produtos com nomes aleatórios"},
+		{title: "💰  Seed: Produtos + Preços", desc: "Criar produtos com preços aleatórios"},
+		{title: "👤  Seed: Clientes", desc: "Criar clientes com dados aleatórios"},
+		{title: "💳  Seed: Payment Intents", desc: "Criar pagamentos confirmados com cartão de teste"},
 	}
-
-	// try to detect env from saved key
-	if cfg.APIKey != "" {
-		if strings.HasPrefix(cfg.APIKey, "sk_test") {
-			m.env = "TEST 🟡"
-		} else if strings.HasPrefix(cfg.APIKey, "sk_live") {
-			m.env = "LIVE 🔴"
-		}
+	if debugMode {
+		items = append(items, menuItem{
+			title: "🐛  Ver Log de Debug",
+			desc:  "Visualizar e copiar o log de debug",
+		})
 	}
+	items = append(items, menuItem{title: "🚪  Sair", desc: "Encerrar o programa"})
 
-	return m
+	return Model{
+		cfg:       cfg,
+		screen:    screenMain,
+		spinner:   s,
+		debugMode: debugMode,
+		menuItems: items,
+	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.spinner.Tick
+	return tea.Batch(m.spinner.Tick, func() tea.Msg {
+		info, err := stripeClient.CheckLogin()
+		return checkLoginMsg{info: info, err: err}
+	})
 }
 
 // --- Update ------------------------------------------------------------------
@@ -116,6 +134,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.logViewport.Width = msg.Width - 4
+		m.logViewport.Height = msg.Height - 8
 		return m, nil
 
 	case spinner.TickMsg:
@@ -129,34 +149,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resultTitle = msg.label
 		m.resultLines = msg.result.Details
 		m.statusMsg = fmt.Sprintf("✓ %d criados  ✗ %d erros", msg.result.Created, msg.result.Errors)
+		logger.Log("seed done [%s]: created=%d errors=%d", msg.label, msg.result.Created, msg.result.Errors)
 		return m, nil
 
-	case validateKeyMsg:
+	case checkLoginMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.statusMsg = errorStyle.Render("✗ " + msg.err.Error())
-			m.screen = screenMain
+			logger.Log("checkLogin failed: %v", msg.err)
+			m.accountInfo = ""
+			m.statusMsg = warningStyle.Render("⚠ " + msg.err.Error())
 		} else {
-			m.env = msg.env
-			m.statusMsg = successStyle.Render(fmt.Sprintf("✓ Conectado! Ambiente: %s", msg.env))
-			m.screen = screenMain
+			logger.Log("checkLogin ok: %s", msg.info)
+			m.accountInfo = msg.info
+			m.statusMsg = successStyle.Render("✓ " + msg.info)
 		}
+		return m, nil
+
+	case loginDoneMsg:
+		if msg.err != nil {
+			logger.Log("stripe login failed: %v", msg.err)
+			m.statusMsg = errorStyle.Render("✗ Falha no login: " + msg.err.Error())
+			return m, nil
+		}
+		logger.Log("stripe login completed successfully")
+		m.loading = true
+		m.statusMsg = "Verificando autenticação..."
+		return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
+			info, err := stripeClient.CheckLogin()
+			return checkLoginMsg{info: info, err: err}
+		})
+
+	case loadLogMsg:
+		m.logContent = msg.content
+		m.logViewport.SetContent(msg.content)
+		m.logViewport.GotoBottom()
 		return m, nil
 	}
 
 	switch m.screen {
 	case screenMain:
 		return m.updateMain(msg)
-	case screenSetKey:
-		return m.updateSetKey(msg)
 	case screenSeedProducts:
 		return m.updateSeedProducts(msg)
 	case screenSeedProductsPrices:
 		return m.updateSeedProductsPrices(msg)
 	case screenSeedCustomers:
 		return m.updateSeedCustomers(msg)
+	case screenSeedPaymentIntents:
+		return m.updateSeedPaymentIntents(msg)
 	case screenResults:
 		return m.updateResults(msg)
+	case screenDebugLog:
+		return m.updateDebugLog(msg)
 	case screenLoading:
 		return m, nil
 	}
@@ -174,7 +218,7 @@ func (m Model) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor--
 			}
 		case msg.String() == "down" || msg.String() == "j":
-			if m.cursor < len(mainMenuItems)-1 {
+			if m.cursor < len(m.menuItems)-1 {
 				m.cursor++
 			}
 		case msg.String() == "enter":
@@ -185,51 +229,30 @@ func (m Model) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMenuSelect() (tea.Model, tea.Cmd) {
+	quitIdx := len(m.menuItems) - 1
+	debugLogIdx := quitIdx - 1 // only valid when debugMode
+
 	switch m.cursor {
-	case 0: // ver projeto
-		if m.cfg.APIKey == "" {
-			m.statusMsg = warningStyle.Render("⚠ Nenhuma chave configurada. Use 'Alterar Chave API'.")
+	case 0: // ver conta
+		if m.accountInfo == "" {
+			m.statusMsg = warningStyle.Render("⚠ Não autenticado. Use 'Login com Stripe'.")
 		} else {
-			masked := maskKey(m.cfg.APIKey)
-			m.statusMsg = fmt.Sprintf("Chave: %s  |  Ambiente: %s", masked, m.env)
+			m.statusMsg = successStyle.Render("✓ " + m.accountInfo)
 		}
 		return m, nil
 
-	case 1: // set key
-		m.screen = screenSetKey
-		m.inputs = make([]textinput.Model, 2)
-
-		ti := textinput.New()
-		ti.Placeholder = "sk_test_..."
-		ti.CharLimit = 200
-		ti.Width = 50
-		ti.Focus()
-		if m.cfg.APIKey != "" {
-			ti.SetValue(m.cfg.APIKey)
-		}
-		m.inputs[0] = ti
-
-		ti2 := textinput.New()
-		ti2.Placeholder = "Meu Projeto"
-		ti2.CharLimit = 60
-		ti2.Width = 50
-		if m.cfg.ProjectName != "" {
-			ti2.SetValue(m.cfg.ProjectName)
-		}
-		m.inputs[1] = ti2
-
-		m.inputFocus = 0
-		m.statusMsg = ""
-		return m, textinput.Blink
+	case 1: // login com stripe
+		return m, tea.ExecProcess(stripeClient.LoginCmd(), func(err error) tea.Msg {
+			return loginDoneMsg{err: err}
+		})
 
 	case 2: // seed products
-		if m.cfg.APIKey == "" {
-			m.statusMsg = warningStyle.Render("⚠ Configure a chave API primeiro!")
+		if m.accountInfo == "" {
+			m.statusMsg = warningStyle.Render("⚠ Faça login primeiro com 'Login com Stripe'.")
 			return m, nil
 		}
 		m.screen = screenSeedProducts
 		m.inputs = make([]textinput.Model, 1)
-
 		ti := textinput.New()
 		ti.Placeholder = "10"
 		ti.CharLimit = 5
@@ -241,27 +264,20 @@ func (m Model) handleMenuSelect() (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case 3: // seed products + prices
-		if m.cfg.APIKey == "" {
-			m.statusMsg = warningStyle.Render("⚠ Configure a chave API primeiro!")
+		if m.accountInfo == "" {
+			m.statusMsg = warningStyle.Render("⚠ Faça login primeiro com 'Login com Stripe'.")
 			return m, nil
 		}
 		m.screen = screenSeedProductsPrices
 		m.inputs = make([]textinput.Model, 4)
-
 		fields := []struct {
 			placeholder string
-			width       int
-		}{
-			{"10", 20},
-			{"500", 20},
-			{"50000", 20},
-			{"brl", 20},
-		}
+		}{{"10"}, {"500"}, {"50000"}, {"brl"}}
 		for i, f := range fields {
 			ti := textinput.New()
 			ti.Placeholder = f.placeholder
 			ti.CharLimit = 20
-			ti.Width = f.width
+			ti.Width = 20
 			m.inputs[i] = ti
 		}
 		m.inputs[0].Focus()
@@ -270,13 +286,12 @@ func (m Model) handleMenuSelect() (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case 4: // seed customers
-		if m.cfg.APIKey == "" {
-			m.statusMsg = warningStyle.Render("⚠ Configure a chave API primeiro!")
+		if m.accountInfo == "" {
+			m.statusMsg = warningStyle.Render("⚠ Faça login primeiro com 'Login com Stripe'.")
 			return m, nil
 		}
 		m.screen = screenSeedCustomers
 		m.inputs = make([]textinput.Model, 1)
-
 		ti := textinput.New()
 		ti.Placeholder = "10"
 		ti.CharLimit = 5
@@ -287,56 +302,50 @@ func (m Model) handleMenuSelect() (tea.Model, tea.Cmd) {
 		m.statusMsg = ""
 		return m, textinput.Blink
 
-	case 5: // quit
-		return m, tea.Quit
-	}
-	return m, nil
-}
-
-func (m Model) updateSetKey(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
-			m.screen = screenMain
+	case 5: // seed payment intents
+		if m.accountInfo == "" {
+			m.statusMsg = warningStyle.Render("⚠ Faça login primeiro com 'Login com Stripe'.")
 			return m, nil
-		case "tab", "shift+tab":
-			m.inputFocus = (m.inputFocus + 1) % len(m.inputs)
-			for i := range m.inputs {
-				if i == m.inputFocus {
-					m.inputs[i].Focus()
-				} else {
-					m.inputs[i].Blur()
-				}
-			}
-			return m, textinput.Blink
-		case "enter":
-			apiKey := strings.TrimSpace(m.inputs[0].Value())
-			projectName := strings.TrimSpace(m.inputs[1].Value())
-			if apiKey == "" {
-				m.statusMsg = errorStyle.Render("✗ A chave API não pode estar vazia.")
-				return m, nil
-			}
-			m.cfg.APIKey = apiKey
-			if projectName != "" {
-				m.cfg.ProjectName = projectName
-			}
-			_ = config.Save(m.cfg)
+		}
+		m.screen = screenSeedPaymentIntents
+		m.inputs = make([]textinput.Model, 5)
+		piFields := []struct {
+			placeholder string
+			charLimit   int
+		}{
+			{"10", 5},        // quantity
+			{"10.00", 15},    // min amount (currency units)
+			{"200.00", 15},   // max amount (currency units)
+			{"brl", 10},      // currency
+			{"pm_card_visa", 40}, // payment method
+		}
+		for i, f := range piFields {
+			ti := textinput.New()
+			ti.Placeholder = f.placeholder
+			ti.CharLimit = f.charLimit
+			ti.Width = 40
+			m.inputs[i] = ti
+		}
+		m.inputs[0].Focus()
+		m.inputFocus = 0
+		m.statusMsg = ""
+		return m, textinput.Blink
 
-			m.screen = screenLoading
-			m.loading = true
-			m.statusMsg = "Validando chave..."
-
-			return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-				env, err := stripeClient.ValidateKey(apiKey)
-				return validateKeyMsg{env: env, err: err}
-			})
+	default:
+		if m.debugMode && m.cursor == debugLogIdx {
+			vp := viewport.New(m.width-4, m.height-8)
+			m.logViewport = vp
+			m.copyStatus = ""
+			m.screen = screenDebugLog
+			return m, func() tea.Msg {
+				return loadLogMsg{content: readLogFile()}
+			}
+		}
+		if m.cursor == quitIdx {
+			return m, tea.Quit
 		}
 	}
-
-	var cmd tea.Cmd
-	m.inputs[m.inputFocus], cmd = m.inputs[m.inputFocus].Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 func (m Model) updateSeedProducts(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -351,9 +360,8 @@ func (m Model) updateSeedProducts(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenLoading
 			m.loading = true
 			m.statusMsg = fmt.Sprintf("Criando %d produtos...", n)
-			apiKey := m.cfg.APIKey
 			return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-				res := stripeClient.SeedProducts(apiKey, n)
+				res := stripeClient.SeedProducts(n)
 				return seedDoneMsg{result: res, label: "Seed: Produtos"}
 			})
 		}
@@ -391,13 +399,11 @@ func (m Model) updateSeedProductsPrices(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if minC > maxC {
 				minC, maxC = maxC, minC
 			}
-
 			m.screen = screenLoading
 			m.loading = true
 			m.statusMsg = fmt.Sprintf("Criando %d produtos + preços...", n)
-			apiKey := m.cfg.APIKey
 			return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-				res := stripeClient.SeedProductsWithPrices(apiKey, n, minC, maxC, cur)
+				res := stripeClient.SeedProductsWithPrices(n, minC, maxC, cur)
 				return seedDoneMsg{result: res, label: "Seed: Produtos + Preços"}
 			})
 		}
@@ -419,15 +425,61 @@ func (m Model) updateSeedCustomers(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenLoading
 			m.loading = true
 			m.statusMsg = fmt.Sprintf("Criando %d clientes...", n)
-			apiKey := m.cfg.APIKey
 			return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-				res := stripeClient.SeedCustomers(apiKey, n)
+				res := stripeClient.SeedCustomers(n)
 				return seedDoneMsg{result: res, label: "Seed: Clientes"}
 			})
 		}
 	}
 	var cmd tea.Cmd
 	m.inputs[0], cmd = m.inputs[0].Update(msg)
+	return m, cmd
+}
+
+func (m Model) updateSeedPaymentIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.screen = screenMain
+			return m, nil
+		case "tab", "shift+tab":
+			m.inputFocus = (m.inputFocus + 1) % len(m.inputs)
+			for i := range m.inputs {
+				if i == m.inputFocus {
+					m.inputs[i].Focus()
+				} else {
+					m.inputs[i].Blur()
+				}
+			}
+			return m, textinput.Blink
+		case "enter":
+			n := parseIntOr(m.inputs[0].Value(), 10)
+			minAmt := parseFloatOr(m.inputs[1].Value(), 10.00)
+			maxAmt := parseFloatOr(m.inputs[2].Value(), 200.00)
+			cur := strings.ToLower(strings.TrimSpace(m.inputs[3].Value()))
+			if cur == "" {
+				cur = "brl"
+			}
+			pm := strings.TrimSpace(m.inputs[4].Value())
+			if pm == "" {
+				pm = "pm_card_visa"
+			}
+			if minAmt > maxAmt {
+				minAmt, maxAmt = maxAmt, minAmt
+			}
+
+			m.screen = screenLoading
+			m.loading = true
+			m.statusMsg = fmt.Sprintf("Criando %d payment intents...", n)
+			return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
+				res := stripeClient.SeedPaymentIntents(n, minAmt, maxAmt, cur, pm)
+				return seedDoneMsg{result: res, label: "Seed: Payment Intents"}
+			})
+		}
+	}
+	var cmd tea.Cmd
+	m.inputs[m.inputFocus], cmd = m.inputs[m.inputFocus].Update(msg)
 	return m, cmd
 }
 
@@ -443,13 +495,61 @@ func (m Model) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateDebugLog(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc", "q":
+			m.screen = screenMain
+			m.copyStatus = ""
+			return m, nil
+		case "c":
+			if m.logContent == "" {
+				m.copyStatus = warningStyle.Render("⚠ Log vazio")
+			} else if err := clipboard.WriteAll(m.logContent); err != nil {
+				logger.Log("clipboard copy failed: %v", err)
+				m.copyStatus = errorStyle.Render("✗ Erro ao copiar: " + err.Error())
+			} else {
+				logger.Log("log copied to clipboard")
+				m.copyStatus = successStyle.Render("✓ Log copiado!")
+			}
+			return m, nil
+		case "r":
+			return m, func() tea.Msg {
+				return loadLogMsg{content: readLogFile()}
+			}
+		}
+	}
+	var cmd tea.Cmd
+	m.logViewport, cmd = m.logViewport.Update(msg)
+	return m, cmd
+}
+
 // --- Helpers -----------------------------------------------------------------
 
-func maskKey(key string) string {
-	if len(key) <= 12 {
-		return "****"
+func readLogFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "(erro ao localizar home)"
 	}
-	return key[:7] + "..." + key[len(key)-4:]
+	path := filepath.Join(home, ".stripe-seeder-debug.log")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "(log não encontrado — nenhuma ação registrada ainda)"
+	}
+	return string(data)
+}
+
+func parseFloatOr(s string, fallback float64) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fallback
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	return v
 }
 
 func parseIntOr(s string, fallback int) int {

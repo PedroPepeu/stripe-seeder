@@ -6,21 +6,19 @@ import (
 )
 
 const logo = `
- _____ _        _               _____               _           
-/  ___| |      (_)             /  ___|             | |          
-\ ` + "`" + `--.| |_ _ __ _ _ __   ___  \ ` + "`" + `--.  ___  ___  __| | ___ _ __ 
+ _____ _        _               _____               _
+/  ___| |      (_)             /  ___|             | |
+\ ` + "`" + `--.| |_ _ __ _ _ __   ___  \ ` + "`" + `--.  ___  ___  __| | ___ _ __
  ` + "`" + `--. \ __| '__| | '_ \ / _ \  ` + "`" + `--. \/ _ \/ _ \/ _` + "`" + ` |/ _ \ '__|
-/\__/ / |_| |  | | |_) |  __/ /\__/ /  __/  __/ (_| |  __/ |   
-\____/ \__|_|  |_| .__/ \___| \____/ \___|\___|\__,_|\___|_|   
-                  | |                                            
+/\__/ / |_| |  | | |_) |  __/ /\__/ /  __/  __/ (_| |  __/ |
+\____/ \__|_|  |_| .__/ \___| \____/ \___|\___|\__,_|\___|_|
+                  | |
                   |_|                                            `
 
 func (m Model) View() string {
 	switch m.screen {
 	case screenMain:
 		return m.viewMain()
-	case screenSetKey:
-		return m.viewSetKey()
 	case screenSeedProducts:
 		return m.viewSeedProducts()
 	case screenSeedProductsPrices:
@@ -31,6 +29,10 @@ func (m Model) View() string {
 		return m.viewResults()
 	case screenLoading:
 		return m.viewLoading()
+	case screenSeedPaymentIntents:
+		return m.viewSeedPaymentIntents()
+	case screenDebugLog:
+		return m.viewDebugLog()
 	}
 	return ""
 }
@@ -41,24 +43,22 @@ func (m Model) viewMain() string {
 	b.WriteString(logoStyle.Render(logo))
 	b.WriteString("\n")
 
-	// Connection status bar
-	if m.cfg.APIKey != "" {
+	if m.accountInfo != "" {
 		projName := m.cfg.ProjectName
 		if projName == "" {
 			projName = "Sem nome"
 		}
-		status := fmt.Sprintf("  Projeto: %s  │  Ambiente: %s  │  Chave: %s  ",
-			projName, m.env, maskKey(m.cfg.APIKey))
+		status := fmt.Sprintf("  Projeto: %s  │  %s  ", projName, m.accountInfo)
 		b.WriteString(statusBoxStyle.Render(status))
 	} else {
-		b.WriteString(statusBoxStyle.Render("  ⚠ Nenhuma chave API configurada  "))
+		b.WriteString(statusBoxStyle.Render("  ⚠ Não autenticado. Use 'Login com Stripe'  "))
 	}
 	b.WriteString("\n\n")
 
 	b.WriteString(titleStyle.Render("  MENU PRINCIPAL"))
 	b.WriteString("\n\n")
 
-	for i, item := range mainMenuItems {
+	for i, item := range m.menuItems {
 		cursor := "  "
 		style := menuItemStyle
 		if i == m.cursor {
@@ -81,32 +81,6 @@ func (m Model) viewMain() string {
 	}
 
 	b.WriteString(helpStyle.Render("  ↑/↓ navegar • enter selecionar • q sair"))
-
-	return b.String()
-}
-
-func (m Model) viewSetKey() string {
-	var b strings.Builder
-
-	b.WriteString(titleStyle.Render("  🔑 CONFIGURAR CHAVE API"))
-	b.WriteString("\n\n")
-
-	b.WriteString(inputLabelStyle.Render("  Stripe Secret Key:"))
-	b.WriteString("\n")
-	b.WriteString("  " + m.inputs[0].View())
-	b.WriteString("\n\n")
-
-	b.WriteString(inputLabelStyle.Render("  Nome do Projeto (opcional):"))
-	b.WriteString("\n")
-	b.WriteString("  " + m.inputs[1].View())
-	b.WriteString("\n\n")
-
-	if m.statusMsg != "" {
-		b.WriteString("  " + m.statusMsg)
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(helpStyle.Render("  tab trocar campo • enter salvar e validar • esc voltar"))
 
 	return b.String()
 }
@@ -174,6 +148,38 @@ func (m Model) viewSeedCustomers() string {
 	return b.String()
 }
 
+func (m Model) viewSeedPaymentIntents() string {
+	var b strings.Builder
+
+	b.WriteString(titleStyle.Render("  💳 SEED: PAYMENT INTENTS"))
+	b.WriteString("\n\n")
+	b.WriteString(mutedStyle.Render("  Cria payment intents confirmados com cartão de teste."))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render("  Valor inserido em unidades da moeda (ex: 50.00 = R$50,00)."))
+	b.WriteString("\n\n")
+
+	labels := []string{
+		"Quantidade:",
+		"Valor mínimo (ex: 10.00):",
+		"Valor máximo (ex: 200.00):",
+		"Moeda (ex: brl, usd):",
+		"Payment method (ex: pm_card_visa):",
+	}
+
+	for i, label := range labels {
+		b.WriteString(inputLabelStyle.Render("  " + label))
+		b.WriteString("\n")
+		b.WriteString("  " + m.inputs[i].View())
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString(mutedStyle.Render("  Outros métodos de teste: pm_card_mastercard, pm_card_visa_debit"))
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("  tab próximo campo • enter executar • esc voltar"))
+
+	return b.String()
+}
+
 func (m Model) viewResults() string {
 	var b strings.Builder
 
@@ -203,6 +209,27 @@ func (m Model) viewLoading() string {
 	b.WriteString(fmt.Sprintf("  %s %s", m.spinner.View(), m.statusMsg))
 	b.WriteString("\n\n")
 	b.WriteString(mutedStyle.Render("  Aguarde, comunicando com a API do Stripe..."))
+
+	return b.String()
+}
+
+func (m Model) viewDebugLog() string {
+	var b strings.Builder
+
+	b.WriteString(titleStyle.Render("  🐛 LOG DE DEBUG"))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(fmt.Sprintf("  ~/.stripe-seeder-debug.log")))
+	b.WriteString("\n\n")
+
+	b.WriteString(logBoxStyle.Render(m.logViewport.View()))
+	b.WriteString("\n")
+
+	if m.copyStatus != "" {
+		b.WriteString("  " + m.copyStatus)
+		b.WriteString("\n")
+	}
+
+	b.WriteString(helpStyle.Render("  ↑/↓ scroll • c copiar tudo • r recarregar • esc voltar"))
 
 	return b.String()
 }

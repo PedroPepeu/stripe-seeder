@@ -73,4 +73,9 @@ var (
 
 	spinnerStyle = lipgloss.NewStyle().
 			Foreground(colorWarning)
+
+	logBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorMuted).
+			Padding(0, 1)
 )

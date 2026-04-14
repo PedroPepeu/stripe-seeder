@@ -9,7 +9,6 @@ import (
 const configFileName = ".stripe-seeder.json"
 
 type Config struct {
-	APIKey      string `json:"api_key"`
 	ProjectName string `json:"project_name"`
 }
 
