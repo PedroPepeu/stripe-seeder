@@ -24,6 +24,7 @@ type screen int
 
 const (
 	screenMain screen = iota
+	screenLogin
 	screenSeedProducts
 	screenSeedProductsPrices
 	screenSeedCustomers
@@ -96,7 +97,6 @@ func NewModel(cfg *config.Config, debugMode bool) Model {
 	s.Style = spinnerStyle
 
 	items := []menuItem{
-		{title: "🔗  Ver Conta Conectada", desc: "Mostra informações da conta Stripe autenticada"},
 		{title: "🔑  Login com Stripe", desc: "Autenticar via stripe login (abre o navegador)"},
 		{title: "📦  Seed: Produtos", desc: "Criar produtos com nomes aleatórios"},
 		{title: "💰  Seed: Produtos + Preços", desc: "Criar produtos com preços aleatórios"},
@@ -161,11 +161,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			logger.Log("checkLogin ok: %s", msg.info)
 			m.accountInfo = msg.info
-			m.statusMsg = successStyle.Render("✓ " + msg.info)
+			m.statusMsg = ""
 		}
 		return m, nil
 
 	case loginDoneMsg:
+		m.screen = screenMain
 		if msg.err != nil {
 			logger.Log("stripe login failed: %v", msg.err)
 			m.statusMsg = errorStyle.Render("✗ Falha no login: " + msg.err.Error())
@@ -189,6 +190,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenMain:
 		return m.updateMain(msg)
+	case screenLogin:
+		return m.updateLogin(msg)
 	case screenSeedProducts:
 		return m.updateSeedProducts(msg)
 	case screenSeedProductsPrices:
@@ -228,25 +231,33 @@ func (m Model) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc", "q":
+			m.screen = screenMain
+			return m, nil
+		case "enter":
+			return m, tea.ExecProcess(stripeClient.LoginCmd(), func(err error) tea.Msg {
+				return loginDoneMsg{err: err}
+			})
+		}
+	}
+	return m, nil
+}
+
 func (m Model) handleMenuSelect() (tea.Model, tea.Cmd) {
 	quitIdx := len(m.menuItems) - 1
 	debugLogIdx := quitIdx - 1 // only valid when debugMode
 
 	switch m.cursor {
-	case 0: // ver conta
-		if m.accountInfo == "" {
-			m.statusMsg = warningStyle.Render("⚠ Não autenticado. Use 'Login com Stripe'.")
-		} else {
-			m.statusMsg = successStyle.Render("✓ " + m.accountInfo)
-		}
+	case 0: // login com stripe
+		m.screen = screenLogin
+		m.statusMsg = ""
 		return m, nil
 
-	case 1: // login com stripe
-		return m, tea.ExecProcess(stripeClient.LoginCmd(), func(err error) tea.Msg {
-			return loginDoneMsg{err: err}
-		})
-
-	case 2: // seed products
+	case 1: // seed products
 		if m.accountInfo == "" {
 			m.statusMsg = warningStyle.Render("⚠ Faça login primeiro com 'Login com Stripe'.")
 			return m, nil
@@ -263,7 +274,7 @@ func (m Model) handleMenuSelect() (tea.Model, tea.Cmd) {
 		m.statusMsg = ""
 		return m, textinput.Blink
 
-	case 3: // seed products + prices
+	case 2: // seed products + prices
 		if m.accountInfo == "" {
 			m.statusMsg = warningStyle.Render("⚠ Faça login primeiro com 'Login com Stripe'.")
 			return m, nil
@@ -285,7 +296,7 @@ func (m Model) handleMenuSelect() (tea.Model, tea.Cmd) {
 		m.statusMsg = ""
 		return m, textinput.Blink
 
-	case 4: // seed customers
+	case 3: // seed customers
 		if m.accountInfo == "" {
 			m.statusMsg = warningStyle.Render("⚠ Faça login primeiro com 'Login com Stripe'.")
 			return m, nil
@@ -302,7 +313,7 @@ func (m Model) handleMenuSelect() (tea.Model, tea.Cmd) {
 		m.statusMsg = ""
 		return m, textinput.Blink
 
-	case 5: // seed payment intents
+	case 4: // seed payment intents
 		if m.accountInfo == "" {
 			m.statusMsg = warningStyle.Render("⚠ Faça login primeiro com 'Login com Stripe'.")
 			return m, nil

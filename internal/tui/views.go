@@ -19,6 +19,8 @@ func (m Model) View() string {
 	switch m.screen {
 	case screenMain:
 		return m.viewMain()
+	case screenLogin:
+		return m.viewLogin()
 	case screenSeedProducts:
 		return m.viewSeedProducts()
 	case screenSeedProductsPrices:
@@ -81,6 +83,31 @@ func (m Model) viewMain() string {
 	}
 
 	b.WriteString(helpStyle.Render("  ↑/↓ navegar • enter selecionar • q sair"))
+
+	return b.String()
+}
+
+func (m Model) viewLogin() string {
+	var b strings.Builder
+
+	b.WriteString(titleStyle.Render("  🔑 LOGIN COM STRIPE"))
+	b.WriteString("\n\n")
+
+	body := "  O stripe CLI vai abrir o navegador para autenticação.\n" +
+		"  Siga as instruções na página e volte quando concluir.\n\n" +
+		"  Se o navegador não abrir automaticamente,\n" +
+		"  copie o link exibido no terminal e acesse manualmente."
+
+	b.WriteString(statusBoxStyle.Render(body))
+	b.WriteString("\n\n")
+
+	if m.accountInfo != "" {
+		b.WriteString(mutedStyle.Render("  Conta atual: "))
+		b.WriteString(successStyle.Render(m.accountInfo))
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString(helpStyle.Render("  enter para iniciar login • esc voltar"))
 
 	return b.String()
 }
