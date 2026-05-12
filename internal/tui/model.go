@@ -239,6 +239,11 @@ func (m Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenMain
 			return m, nil
 		case "enter":
+			if err := stripeClient.CheckInstalled(); err != nil {
+				m.screen = screenMain
+				m.statusMsg = errorStyle.Render("✗ " + err.Error())
+				return m, nil
+			}
 			return m, tea.ExecProcess(stripeClient.LoginCmd(), func(err error) tea.Msg {
 				return loginDoneMsg{err: err}
 			})
@@ -253,6 +258,10 @@ func (m Model) handleMenuSelect() (tea.Model, tea.Cmd) {
 
 	switch m.cursor {
 	case 0: // login com stripe
+		if err := stripeClient.CheckInstalled(); err != nil {
+			m.statusMsg = errorStyle.Render("✗ " + err.Error())
+			return m, nil
+		}
 		m.screen = screenLogin
 		m.statusMsg = ""
 		return m, nil

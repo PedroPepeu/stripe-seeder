@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -29,10 +30,27 @@ func CheckLogin() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// CheckInstalled verifies that the stripe CLI is available in PATH.
+func CheckInstalled() error {
+	path, err := exec.LookPath("stripe")
+	if err != nil {
+		logger.Log("stripe not found in PATH: %v", err)
+		return fmt.Errorf("stripe CLI não encontrado no PATH. Instale em: https://stripe.com/docs/stripe-cli")
+	}
+	logger.Log("stripe found at: %s", path)
+	return nil
+}
+
 // LoginCmd returns a *exec.Cmd for stripe login (run via tea.ExecProcess).
+// We open /dev/tty explicitly so stripe detects a real TTY on stdin and uses
+// the interactive browser-based OAuth flow instead of non-interactive JSON mode.
 func LoginCmd() *exec.Cmd {
 	logger.Log("cmd: stripe login")
-	return exec.Command("stripe", "login")
+	cmd := exec.Command("stripe", "login")
+	if tty, err := os.Open("/dev/tty"); err == nil {
+		cmd.Stdin = tty
+	}
+	return cmd
 }
 
 // --- Random data generators ---------------------------------------------------
